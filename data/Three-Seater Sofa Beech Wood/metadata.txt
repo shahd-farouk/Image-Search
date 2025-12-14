@@ -1,0 +1,6 @@
+Three-Seater Sofa Beech Wood
+Material: Linen
+Item_Type: Sofa
+Width (cm): 300
+Height (cm): 80
+Colors: Beige, Black, Blue, Green, Grey

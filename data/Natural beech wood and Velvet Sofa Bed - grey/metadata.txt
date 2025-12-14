@@ -1,0 +1,6 @@
+Natural beech wood and Velvet Sofa Bed - grey
+Material: Natural beech wood
+Item_Type: Sofa Bed
+Width (cm): 200
+Height (cm): 80
+Colors: Light grey

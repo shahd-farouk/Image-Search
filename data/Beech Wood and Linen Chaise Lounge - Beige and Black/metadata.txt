@@ -1,0 +1,6 @@
+Beech Wood and Linen Chaise Lounge - Beige and Black
+Material: Beech Wood
+Item_Type: Chaise Lounge
+Width (cm): 70
+Height (cm): 70
+Color: Beige and Black

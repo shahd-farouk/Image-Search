@@ -1,0 +1,6 @@
+Beech Wood and Linen Side Chair
+Material: Beech Wood
+Item_Type: Chair
+Width (cm): 60
+Height (cm): 90
+Colors: Beige, Blue

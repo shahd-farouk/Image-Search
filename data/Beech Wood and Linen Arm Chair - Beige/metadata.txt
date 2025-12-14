@@ -1,0 +1,6 @@
+Beech Wood and Linen Arm Chair - Beige
+Material: Beech Wood
+Item_Type: Chair
+Width (cm): 70
+Height (cm): 80
+Colors: Beige

@@ -1,0 +1,6 @@
+Beech Wood and Linen Wood 3 Seater Sofa - Beige
+Material: Beech Wood
+Item_Type: Sofa
+Width (cm): 240
+Height (cm): 60
+Colors: Beige

@@ -1,0 +1,6 @@
+Beech Wood and Linen Fabric L-Shape Sofa
+Material: Soft Linen
+Item_Type: Sofa
+Width (cm): 280
+Height (cm): 85
+Colors: Off-White, Light Grey, Grey, Blue

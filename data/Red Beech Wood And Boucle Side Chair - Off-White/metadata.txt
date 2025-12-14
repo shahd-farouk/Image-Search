@@ -1,0 +1,6 @@
+Red Beech Wood And Boucle Side Chair - Off-White
+Material: Red beech wood
+Item_Type: Chair
+Width (cm): 70
+Height (cm): 75
+Colors: Off-white

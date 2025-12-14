@@ -1,0 +1,6 @@
+Beech Wood and Linen Fabric Sofa Bed
+Material: Beech Wood
+Item_Type: Sofa Bed
+Width (cm): 200
+Height (cm): 70
+Colors: Grey, Beige, Blue
