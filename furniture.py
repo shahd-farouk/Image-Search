@@ -24,11 +24,6 @@ class Util:
 
     @staticmethod
     def get_connection():
-        """
-        Connect to Elasticsearch. Supports cloud_id/basic_auth or http host + basic auth.
-        Credentials can be provided via environment variables ES_CLOUD_ID/ES_USER/ES_PASS
-        or ES_HOST/ES_USER/ES_PASS.
-        """
         if ES_CLOUD_ID and ES_USER and ES_PASS:
             es = Elasticsearch(cloud_id=ES_CLOUD_ID, basic_auth=(ES_USER, ES_PASS))
         elif ES_HOST and ES_USER and ES_PASS:
@@ -45,10 +40,6 @@ class Util:
 
     @staticmethod
     def create_index(es: Elasticsearch, index_name: str, target_dim=512, text_dim=None, image_dim=None, force_recreate: bool = False):
-        """
-        Create hybrid index with text & image dense_vector fields.
-        If force_recreate=True, will delete existing index first.
-        """
         if text_dim is None:
             text_dim = target_dim
         if image_dim is None:
@@ -192,9 +183,6 @@ class FurnitureRepository:
         self.es_client.bulk(body=operations, refresh='true' if refresh else 'false')
 
     def search_by_knn(self, field: str, vector: List[float], k: int = 5, source_fields: List[str] = None):
-        """
-        Generic kNN search function for a vector field (image_embedding or text_embedding).
-        """
         if source_fields is None:
             source_fields = ["item_name", "material", "item_type", "width", "height", "colors", "image_path", "description"]
 
@@ -220,7 +208,6 @@ class FurnitureRepository:
             return {"hits": {"hits": []}}
 
     def fetch_all_items(self, size: int = 1000):
-        """Read documents from the index (useful when you want to migrate or inspect)."""
         try:
             resp = self.es_client.search(index=self._index_name, body={"size": size, "query": {"match_all": {}}})
             return resp.get('hits', {}).get('hits', [])

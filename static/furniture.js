@@ -1,13 +1,11 @@
 const resultsDiv = document.getElementById("results");
 const resultsCount = document.getElementById("resultsCount");
 
-// Set example search
 function setSearchExample(example) {
   document.getElementById("textQuery").value = example;
   searchText();
 }
 
-// Display search results
 function displayResults(items) {
   resultsDiv.innerHTML = "";
   resultsCount.textContent = `${items.length} ${items.length === 1 ? 'item' : 'items'}`;

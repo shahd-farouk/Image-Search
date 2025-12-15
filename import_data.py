@@ -5,11 +5,10 @@ from pathlib import Path
 from furniture import Furniture, FurnitureRepository, Util
 from PIL import Image
 
-DATA_FOLDER = Path("data")  # adjust as needed
+DATA_FOLDER = Path("data")
 UPLOAD_DIR = Path("static/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# Elasticsearch setup
 es = Util.get_connection()
 INDEX = Util.get_index_name()
 repo = FurnitureRepository(es, INDEX)
@@ -51,9 +50,20 @@ def parse_metadata(meta_path):
 
 
 def find_images(folder_path):
-    """Return all jpg/png images in the folder"""
-    return [file for file in folder_path.iterdir() if file.suffix.lower() in [".jpg", ".jpeg", ".png"]]
+    return [
+        file
+        for file in folder_path.iterdir()
+        if file.is_file()
+        and file.stem.lower() == "original"
+        and file.suffix.lower() in [".jpg", ".jpeg", ".png"]
+        ]
 
+def reset_index():
+    if es.indices.exists(index=INDEX):
+        es.indices.delete(index=INDEX)
+        print(f"Deleted index: {INDEX}")
+    else:
+        print(f"Index does not exist: {INDEX}")
 
 def import_all():
     for folder in DATA_FOLDER.iterdir():
@@ -72,12 +82,10 @@ def import_all():
             continue
 
         for img_path in images:
-            # Copy image to uploads folder
             dest_filename = f"{metadata['item_name'].replace(' ', '_')}_{img_path.name}"
             dest_path = UPLOAD_DIR / dest_filename
             shutil.copy(img_path, dest_path)
 
-            # Generate embeddings using the actual filesystem path
             f = Furniture(
                 item_name=metadata["item_name"],
                 material=metadata["material"],
@@ -85,16 +93,16 @@ def import_all():
                 width=metadata["width"],
                 height=metadata["height"],
                 colors=metadata["colors"],
-                image_path=str(dest_path),  # filesystem path for embeddings
+                image_path=str(dest_path),
                 description=metadata["description"]
             )
             f.generate_embeddings()
 
-            # Update image_path to serveable path before inserting into ES
             f.image_path = f"/static/uploads/{dest_filename}"
 
             repo.insert(f)
 
 
 if __name__ == "__main__":
+    reset_index()
     import_all()
