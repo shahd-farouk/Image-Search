@@ -1,22 +1,21 @@
-# furniture_es.py
 import os
 import re
-import traceback
-from pathlib import Path
-from typing import List, Dict, Optional
-
+import warnings
 from PIL import Image
+from typing import List, Optional
+from elasticsearch import Elasticsearch
 from sentence_transformers import SentenceTransformer
-from elasticsearch import Elasticsearch, exceptions as es_exceptions
+
+warnings.filterwarnings("ignore", category=UserWarning)
 
 # ---------- Configuration ----------
-DEFAULT_INDEX = os.environ.get("ES_INDEX", "hybrid-index")
-ES_CLOUD_ID = os.environ.get("ES_CLOUD_ID")  # optional
+DEFAULT_INDEX = os.environ.get("ES_INDEX", "products_en")
+ES_CLOUD_ID = os.environ.get("ES_CLOUD_ID")
 ES_USER = os.environ.get("ES_USER")
 ES_PASS = os.environ.get("ES_PASS")
-ES_HOST = os.environ.get("ES_HOST")  # for non-cloud usage, e.g. "http://localhost:9200"
-# -----------------------------------
+ES_HOST = os.environ.get("ES_HOST", "http://localhost:9200")
 
+# ---------- Utilities ----------
 class Util:
     @staticmethod
     def get_index_name():
@@ -26,191 +25,160 @@ class Util:
     def get_connection():
         if ES_CLOUD_ID and ES_USER and ES_PASS:
             es = Elasticsearch(cloud_id=ES_CLOUD_ID, basic_auth=(ES_USER, ES_PASS))
-        elif ES_HOST and ES_USER and ES_PASS:
+        elif ES_USER and ES_PASS:
             es = Elasticsearch(ES_HOST, basic_auth=(ES_USER, ES_PASS))
         else:
-            # fallback to local
-            es = Elasticsearch("http://localhost:9200")
-        # quick ping / info
-        try:
-            es.info()
-        except Exception as e:
-            raise RuntimeError(f"Elasticsearch unreachable: {e}")
+            es = Elasticsearch(ES_HOST)
+        es.info()
         return es
 
     @staticmethod
-    def create_index(es: Elasticsearch, index_name: str, target_dim=512, text_dim=None, image_dim=None, force_recreate: bool = False):
-        if text_dim is None:
-            text_dim = target_dim
-        if image_dim is None:
-            image_dim = target_dim
+    def create_index(es: Elasticsearch, index_name: str, dim: int = 512, force: bool = False):
+        if force:
+            es.indices.delete(index=index_name, ignore_unavailable=True)
 
-        index_config = {
-            "settings": {
-                "index.refresh_interval": "5s",
-                "number_of_shards": 1
-            },
-            "mappings": {
-                "properties": {
-                    "item_name": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
-                    "material": {"type": "keyword"},
-                    "item_type": {"type": "keyword"},
-                    "width": {"type": "float"},
-                    "height": {"type": "float"},
-                    "colors": {"type": "keyword"},
-                    "image_path": {"type": "keyword"},
-                    "description": {"type": "text"},
-                    "text_embedding": {
-                        "type": "dense_vector",
-                        "dims": int(text_dim),
-                        "index": True,
-                        "similarity": "cosine"
-                    },
-                    "image_embedding": {
-                        "type": "dense_vector",
-                        "dims": int(image_dim),
-                        "index": True,
-                        "similarity": "cosine"
-                    },
-                    "exif": {
-                        "properties": {
-                            "location": {"type": "geo_point"},
-                            "date": {"type": "date"}
+        if es.indices.exists(index=index_name):
+            return
+
+        es.indices.create(
+            index=index_name,
+            body={
+                "settings": {"number_of_shards": 1},
+                "mappings": {
+                    "properties": {
+                        "sku": {"type": "keyword"},
+                        "item_name": {"type": "text"},
+                        "description": {"type": "text"},
+                        "material_value": {"type": "keyword"},
+                        "item_type": {"type": "keyword"},
+                        "colors": {"type": "keyword"},
+                        "dimensions": {"type": "keyword"},
+                        "price": {"type": "float"},
+                        "special_price": {"type": "float"},
+                        "final_price": {"type": "float"},
+                        "image_path": {"type": "keyword"},
+                        "media_gallery": {
+                            "type": "nested",
+                            "properties": {
+                                "id": {"type": "integer"},
+                                "media_type": {"type": "keyword"},
+                                "file": {"type": "keyword"},
+                                "position": {"type": "integer"},
+                                "disabled": {"type": "boolean"},
+                                "types": {"type": "keyword"}
+                            }
+                        },
+                        "text_embedding": {
+                            "type": "dense_vector",
+                            "dims": dim,
+                            "index": True,
+                            "similarity": "cosine"
+                        },
+                        "image_embedding": {
+                            "type": "dense_vector",
+                            "dims": dim,
+                            "index": True,
+                            "similarity": "cosine"
                         }
                     }
                 }
             }
-        }
+        )
 
-        # delete if exists and force_recreate requested
-        if force_recreate:
-            es.indices.delete(index=index_name, ignore_unavailable=True)
-
-        try:
-            if not es.indices.exists(index=index_name):
-                es.indices.create(index=index_name, body=index_config)
-                print(f"Created index: {index_name}")
-            else:
-                print(f"Index already exists: {index_name}")
-        except Exception as e:
-            print("Error creating index:", e)
-            raise
-
-    @staticmethod
-    def delete_index(es: Elasticsearch, index_name: str):
-        es.indices.delete(index=index_name, ignore_unavailable=True)
-
-# ---------- domain (Furniture) ----------
+# ---------- Domain Model ----------
 class Furniture:
-    # Use CLIP via sentence-transformers
-    model = SentenceTransformer('clip-ViT-B-32')
+    model = SentenceTransformer("clip-ViT-B-32")
 
-    def __init__(self, item_name: str, material: str, item_type: str, width: Optional[float],
-                 height: Optional[float], colors, image_path: str, description: str = None):
+    def __init__(self, sku: str, item_name: str, material_value: str, item_type: str,
+                 colors, dimensions: str, price: float, special_price: Optional[float],
+                 final_price: float, image_path: str, description: Optional[str] = None,
+                 media_gallery: Optional[List[dict]] = None):
+        self.sku = sku
         self.item_name = item_name
-        self.material = material
+        self.material_value = material_value
         self.item_type = item_type
-        self.width = float(width) if width is not None else None
-        self.height = float(height) if height is not None else None
-
-        if isinstance(colors, str):
-            parsed = [c.strip() for c in re.split(r',|\||;', colors) if c.strip()]
-            self.colors = parsed if parsed else [colors]
-        elif isinstance(colors, (list, tuple)):
-            self.colors = list(colors)
-        else:
-            self.colors = [str(colors)]
-
+        self.colors = self._parse_colors(colors)
+        self.dimensions = dimensions
+        self.price = price
+        self.special_price = special_price
+        self.final_price = final_price
         self.image_path = image_path
-        self.description = description
+        self.description = description or f"{material_value} {item_type}"
+        self.media_gallery = media_gallery or []
         self.image_embedding = None
         self.text_embedding = None
 
     @staticmethod
-    def encode_image_from_path(image_path: str):
-        image = Image.open(image_path).convert("RGB")
-        emb = Furniture.model.encode(image)
-        return emb.astype(float).tolist()
-
-    @staticmethod
-    def encode_text(text: str):
-        emb = Furniture.model.encode(text)
-        return emb.astype(float).tolist()
+    def _parse_colors(colors):
+        if isinstance(colors, str):
+            return [c.strip() for c in re.split(r",|\||;", colors) if c.strip()]
+        if isinstance(colors, (list, tuple)):
+            return list(colors)
+        return []
 
     def generate_embeddings(self):
         if self.image_path:
-            self.image_embedding = Furniture.encode_image_from_path(self.image_path)
+            image = Image.open(self.image_path).convert("RGB")
+            self.image_embedding = self.model.encode(image).astype(float).tolist()
         if self.description:
-            self.text_embedding = Furniture.encode_text(self.description)
+            self.text_embedding = self.model.encode(self.description).astype(float).tolist()
 
     def to_dict(self):
-        body = {
-            'item_name': self.item_name,
-            'material': self.material,
-            'item_type': self.item_type,
-            'width': self.width,
-            'height': self.height,
-            'colors': self.colors,
-            'image_path': self.image_path,
-            'description': self.description,
-            'image_embedding': self.image_embedding
+        return {
+            "sku": self.sku,
+            "item_name": self.item_name,
+            "material_value": self.material_value,
+            "item_type": self.item_type,
+            "colors": self.colors,
+            "dimensions": self.dimensions,
+            "price": self.price,
+            "special_price": self.special_price,
+            "final_price": self.final_price,
+            "image_path": self.image_path,
+            "description": self.description,
+            "media_gallery": self.media_gallery,
+            "image_embedding": self.image_embedding,
+            "text_embedding": self.text_embedding
         }
-        if self.text_embedding is not None:
-            body['text_embedding'] = self.text_embedding
-        return body
 
-# ---------- repository ----------
+# ---------- Repository ----------
 class FurnitureRepository:
-    def __init__(self, es_client: Elasticsearch, index_name: str):
-        self.es_client = es_client
-        self._index_name = index_name
-        # ensure index exists
-        Util.create_index(es_client, index_name)
+    def __init__(self, es: Elasticsearch, index_name: str):
+        Util.create_index(es, index_name)
+        self.es = es
+        self.index = index_name
 
-    def insert(self, furniture: Furniture):
-        if furniture.image_embedding is None and furniture.image_path:
-            furniture.generate_embeddings()
-        body = furniture.to_dict()
-        self.es_client.index(index=self._index_name, document=body)
+    def insert(self, item: Furniture):
+        item.generate_embeddings()
+        self.es.index(index=self.index, id=item.sku, document=item.to_dict())
 
-    def bulk_insert(self, furniture_items: List[Furniture], refresh: bool = False):
-        operations = []
-        for item in furniture_items:
-            if item.image_embedding is None and item.image_path:
-                item.generate_embeddings()
-            operations.append({"index": {"_index": self._index_name}})
-            operations.append(item.to_dict())
-        self.es_client.bulk(body=operations, refresh='true' if refresh else 'false')
+    def bulk_insert(self, items: List[Furniture], refresh: bool = False):
+        ops = []
+        for item in items:
+            item.generate_embeddings()
+            ops.append({"index": {"_index": self.index, "_id": item.sku}})
+            ops.append(item.to_dict())
+        self.es.bulk(body=ops, refresh=refresh)
 
     def search_by_knn(self, field: str, vector: List[float], k: int = 5, source_fields: List[str] = None):
         if source_fields is None:
-            source_fields = ["item_name", "material", "item_type", "width", "height", "colors", "image_path", "description"]
-
-        knn = {
+            source_fields = [
+                "sku", "item_name", "material_value", "item_type",
+                "colors", "dimensions", "price", "special_price", "final_price",
+                "image_path", "description", "media_gallery"
+            ]
+        knn_query = {
             "field": field,
             "k": k,
             "num_candidates": 100,
-            "query_vector": vector,
+            "query_vector": vector
         }
-
         try:
-            resp = self.es_client.search(
-                index=self._index_name,
-                body={
-                    "size": k,
-                    "knn": knn,
-                    "_source": source_fields
-                }
+            resp = self.es.search(
+                index=self.index,
+                body={"size": k, "knn": knn_query, "_source": source_fields}
             )
             return resp
         except Exception as e:
-            print("Search error:", e)
+            print("KNN search error:", e)
             return {"hits": {"hits": []}}
-
-    def fetch_all_items(self, size: int = 1000):
-        try:
-            resp = self.es_client.search(index=self._index_name, body={"size": size, "query": {"match_all": {}}})
-            return resp.get('hits', {}).get('hits', [])
-        except Exception as e:
-            print("Fetch error:", e)
-            return []

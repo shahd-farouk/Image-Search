@@ -163,6 +163,19 @@
       margin-bottom: 3rem;
     }
 
+    .suggestion {
+      margin: 10px 0;
+      color: #555;
+      font-style: italic;
+      font-size: 0.95rem;
+    }
+    .suggestion a {
+      color: #007BFF;
+      text-decoration: underline;
+      cursor: pointer;
+    }
+
+
     .results-header {
       display: flex;
       justify-content: space-between;

@@ -1,100 +1,86 @@
-# app.py
 import os
 import io
-from typing import List, Optional
-
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import JSONResponse
 import uvicorn
+from typing import List
 from PIL import Image
-
-from furniture import Util, FurnitureRepository, Furniture
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse, FileResponse
+from furniture import Util, FurnitureRepository, Furniture
 
 app = FastAPI(title="Furniture Search API")
 
-# Serve static files including uploaded images
+# ---------- Static files ----------
 STATIC_DIR = "static"
 UPLOAD_DIR = os.path.join(STATIC_DIR, "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# Connect to Elasticsearch
+# ---------- Elasticsearch ----------
 es = Util.get_connection()
 INDEX = Util.get_index_name()
 repo = FurnitureRepository(es, INDEX)
 
+# ---------- Helpers ----------
+def save_upload_image(upload: UploadFile) -> str:
+    try:
+        contents = upload.file.read()
+        upload.file.seek(0)
+        img = Image.open(io.BytesIO(contents)).convert("RGB")
+    except Exception as e:
+        raise HTTPException(400, f"Invalid image: {e}")
 
-# Helper: convert UploadFile to PIL Image
-def pil_image_from_upload(upload: UploadFile) -> Image.Image:
-    contents = upload.file.read()
-    upload.file.seek(0)
-    image = Image.open(io.BytesIO(contents)).convert("RGB")
-    return image
+    safe_name = upload.filename.replace(" ", "_")
+    abs_path = os.path.join(UPLOAD_DIR, safe_name)
+    img.save(abs_path)
 
+    return abs_path  # absolute path for embeddings
+
+# ---------- Routes ----------
 @app.get("/")
 async def serve_ui():
     return FileResponse("static/index.html")
 
-@app.post("/items/", response_model=dict)
+
+@app.post("/items")
 async def add_item(
+    sku: str = Form(...),
     item_name: str = Form(...),
-    material: str = Form("unknown"),
+    material_value: str = Form("Mixed"),
     item_type: str = Form(""),
-    width: Optional[float] = Form(None),
-    height: Optional[float] = Form(None),
-    colors: str = Form("unknown"),
+    colors: str = Form(""),
+    dimensions: str = Form(""),
+    price: float = Form(0),
+    special_price: float | None = Form(None),
+    final_price: float = Form(0),
     description: str = Form(""),
     image: UploadFile = File(...),
 ):
-    # Convert uploaded image to PIL
-    try:
-        contents = await image.read()
-        pil_img = Image.open(io.BytesIO(contents)).convert("RGB")
-    except Exception as e:
-        raise HTTPException(400, f"Invalid image: {e}")
+    image_path = save_upload_image(image)
 
-    # Save image under /static/uploads
-    safe_filename = image.filename.replace(" ", "_")
-    save_path = os.path.join(UPLOAD_DIR, safe_filename)
-    pil_img.save(save_path)
-    relative_path = f"/static/uploads/{safe_filename}"
-
-    # Create Furniture object
-    f = Furniture(
+    furniture = Furniture(
+        sku=sku,
         item_name=item_name,
-        material=material,
+        material_value=material_value,
         item_type=item_type,
-        width=width,
-        height=height,
-        colors=[c.strip() for c in colors.split(",")],
-        image_path=relative_path,  # use serveable path
-        description=description
+        colors=[c.strip() for c in colors.split(",") if c.strip()],
+        dimensions=dimensions,
+        price=price,
+        special_price=special_price,
+        final_price=final_price,
+        image_path=image_path,
+        description=description,
+        media_gallery=[{"file": image_path, "media_type": "image"}],
     )
-    f.generate_embeddings()
-    repo.insert(f)
-    return {"status": "ok", "item_name": item_name, "image_path": relative_path}
 
+    repo.insert(furniture)
 
-@app.post("/search/image")
-async def search_by_image(image: UploadFile = File(...), k: int = 5):
-    if not image:
-        raise HTTPException(400, "No image uploaded")
-
-    try:
-        contents = await image.read()
-        pil_img = Image.open(io.BytesIO(contents)).convert("RGB")
-    except Exception as e:
-        raise HTTPException(400, f"Invalid image: {e}")
-
-    # Generate embedding
-    emb = Furniture.model.encode(pil_img).astype(float).tolist()
-    resp = repo.search_by_knn("image_embedding", emb, k=k)
-    hits = resp.get("hits", {}).get("hits", [])
-    results = [h.get("_source", {}) for h in hits]
-
-    return JSONResponse({"results": results})
+    return {
+        "status": "ok",
+        "sku": sku,
+        "item_name": item_name,
+        "image_path": image_path,
+    }
 
 
 @app.get("/search/text")
@@ -102,24 +88,82 @@ async def search_by_text(q: str, k: int = 5):
     if not q:
         raise HTTPException(400, "Missing query parameter 'q'")
 
-    emb = Furniture.model.encode(q).astype(float).tolist()
-    resp = repo.search_by_knn("text_embedding", emb, k=k)
-    hits = resp.get("hits", {}).get("hits", [])
-    results = [h.get("_source", {}) for h in hits]
+    query_body = {
+        "size": k,
+        "query": {
+            "multi_match": {
+                "query": q,
+                "fields": [
+                    "item_name^3",
+                    "description^2",
+                    "material_value",
+                    "item_type",
+                    "colors",
+                    "dimensions",
+                    "sku"
+                ],
+                "fuzziness": "AUTO"
+            }
+        }
+    }
 
-    return JSONResponse({"results": results})
+    resp = es.search(index=INDEX, body=query_body)
+    hits = resp.get("hits", {}).get("hits", [])
+    return {"results": [h.get("_source", {}) for h in hits]}
+
+
+@app.get("/suggest")
+async def suggest_text(q: str):
+    if not q:
+        return {"did_you_mean": None}
+
+    suggest_body = {
+        "suggest": {
+            "spelling": {
+                "text": q,
+                "term": {
+                    "field": "item_name",
+                    "suggest_mode": "always"
+                }
+            }
+        }
+    }
+
+    try:
+        resp = es.suggest(index=INDEX, body=suggest_body)
+        options = resp.get("spelling", [])[0].get("options", [])
+        return {"did_you_mean": options[0]["text"] if options else None}
+    except Exception:
+        return {"did_you_mean": None}
+
+
+@app.post("/search/image")
+async def search_by_image(image: UploadFile = File(...), k: int = 5):
+    try:
+        contents = await image.read()
+        img = Image.open(io.BytesIO(contents)).convert("RGB")
+    except Exception as e:
+        raise HTTPException(400, f"Invalid image: {e}")
+
+    vector = Furniture.model.encode(img).astype(float).tolist()
+    resp = repo.search_by_knn("image_embedding", vector, k=k)
+
+    hits = resp.get("hits", {}).get("hits", [])
+    return {"results": [h.get("_source", {}) for h in hits]}
 
 
 @app.post("/search/embedding")
-async def search_by_embedding(embedding: List[float], field: str = "image_embedding", k: int = 5):
+async def search_by_embedding(
+    embedding: List[float],
+    field: str = "image_embedding",
+    k: int = 5
+):
     if field not in ("image_embedding", "text_embedding"):
-        raise HTTPException(400, "field must be 'image_embedding' or 'text_embedding'")
+        raise HTTPException(400, "Invalid embedding field")
 
     resp = repo.search_by_knn(field, embedding, k=k)
     hits = resp.get("hits", {}).get("hits", [])
-    results = [h.get("_source", {}) for h in hits]
-
-    return JSONResponse({"results": results})
+    return {"results": [h.get("_source", {}) for h in hits]}
 
 
 if __name__ == "__main__":
