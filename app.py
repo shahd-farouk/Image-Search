@@ -10,33 +10,31 @@ from furniture import Util, FurnitureRepository, Furniture
 
 app = FastAPI(title="Furniture Search API")
 
-# ---------- Static files ----------
 STATIC_DIR = "static"
 UPLOAD_DIR = os.path.join(STATIC_DIR, "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# ---------- Elasticsearch ----------
 es = Util.get_connection()
 INDEX = Util.get_index_name()
 repo = FurnitureRepository(es, INDEX)
 
-# ---------- Helpers ----------
-def save_upload_image(upload: UploadFile) -> str:
+async def save_upload_image(upload: UploadFile) -> str:
+    contents = await upload.read()  # use async read
     try:
-        contents = upload.file.read()
-        upload.file.seek(0)
         img = Image.open(io.BytesIO(contents)).convert("RGB")
     except Exception as e:
         raise HTTPException(400, f"Invalid image: {e}")
 
-    safe_name = upload.filename.replace(" ", "_")
+    safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in upload.filename)
+    rel_path = f"uploads/{safe_name}"           # ← relative path
     abs_path = os.path.join(UPLOAD_DIR, safe_name)
+
     img.save(abs_path)
+    print(f"Saved image: {abs_path}")
 
-    return abs_path  # absolute path for embeddings
+    return rel_path
 
-# ---------- Routes ----------
 @app.get("/")
 async def serve_ui():
     return FileResponse("static/index.html")
@@ -145,7 +143,8 @@ async def search_by_image(image: UploadFile = File(...), k: int = 5):
     except Exception as e:
         raise HTTPException(400, f"Invalid image: {e}")
 
-    vector = Furniture.model.encode(img).astype(float).tolist()
+    model = Furniture.get_model()
+    vector = model.encode(img).astype(float).tolist()
     resp = repo.search_by_knn("image_embedding", vector, k=k)
 
     hits = resp.get("hits", {}).get("hits", [])

@@ -29,7 +29,12 @@ async function fetchSuggestion() {
     const data = await resp.json();
 
     if (data.did_you_mean && data.did_you_mean.toLowerCase() !== q.toLowerCase()) {
-      suggestionDiv.innerHTML = `Did you mean: <a href="#" onclick="setSearchExample('${data.did_you_mean}')">${data.did_you_mean}</a>?`;
+      suggestionDiv.innerHTML = `
+        Did you mean: 
+        <a href="#" onclick="setSearchExample('${escapeHtml(data.did_you_mean)}')">
+          ${escapeHtml(data.did_you_mean)}
+        </a>?
+      `;
     } else {
       suggestionDiv.innerHTML = "";
     }
@@ -39,12 +44,19 @@ async function fetchSuggestion() {
   }
 }
 
+// Simple HTML escape to prevent XSS if item names have special chars
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
 // ------------------ Render Results ------------------
 function displayResults(items) {
   resultsDiv.innerHTML = "";
   resultsCount.textContent = `${items.length} ${items.length === 1 ? "item" : "items"}`;
 
-  if (!items.length) {
+  if (items.length === 0) {
     resultsDiv.innerHTML = `
       <div class="no-results">
         <i class="fas fa-search"></i>
@@ -61,30 +73,29 @@ function displayResults(items) {
     // ---- Image ----
     const imgDiv = document.createElement("div");
     imgDiv.className = "result-image";
+
     const img = document.createElement("img");
-
-    // image_path is stored as absolute/local path (e.g. static/uploads/x.jpg)
-    if (item.image_path.startsWith("/static")) {
-      img.src = item.image_path;
-    } else if (item.image_path.startsWith("static")) {
-      img.src = `/${item.image_path}`;
-    } else {
-      img.src = `/static/uploads/${item.image_path.split("/").pop()}`;
-    }
-
+    img.src = `/static/${item.image_path}`;
     img.alt = item.item_name || "Furniture item";
+    img.loading = "lazy";
+
     imgDiv.appendChild(img);
     div.appendChild(imgDiv);
 
     // ---- Info ----
     const info = document.createElement("div");
     info.className = "result-content";
+
+    const price = item.final_price ?? item.special_price ?? item.price ?? "N/A";
+
     info.innerHTML = `
-      <h3 class="result-title">${item.item_name || ""}</h3>
-      <p class="result-description">${item.description || ""}</p>
-      <div class="result-price">${item.final_price ?? item.price ?? ""}</div>
+      <h3 class="result-title">${escapeHtml(item.item_name || "")}</h3>
+      <p class="result-description">${escapeHtml(item.description || "")}</p>
+      <div class="result-price">${price}</div>
       <div class="result-tags">
-        ${(item.colors || []).map(c => `<span class="tag">${c}</span>`).join("")}
+        ${(item.colors || [])
+          .map(color => `<span class="tag">${escapeHtml(color)}</span>`)
+          .join("")}
       </div>
     `;
 
@@ -97,7 +108,7 @@ function displayResults(items) {
 async function searchText() {
   const q = textInput.value.trim();
   if (!q) {
-    alert("Enter a text query");
+    alert("Please enter a text query");
     return;
   }
 
@@ -110,19 +121,19 @@ async function searchText() {
       alert(`Error ${resp.status}: ${text}`);
       return;
     }
-
     const data = await resp.json();
     displayResults(data.results || []);
   } catch (err) {
-    alert("Error fetching results: " + err);
+    console.error("Text search error:", err);
+    alert("Failed to search. Check console for details.");
   }
 }
 
 // ------------------ Image Search ------------------
 async function searchImage() {
   const fileInput = document.getElementById("imageQuery");
-  if (!fileInput.files.length) {
-    alert("Select an image first");
+  if (!fileInput.files || fileInput.files.length === 0) {
+    alert("Please select an image first");
     return;
   }
 
@@ -146,6 +157,7 @@ async function searchImage() {
     const data = await resp.json();
     displayResults(data.results || []);
   } catch (err) {
-    alert("Error fetching image results: " + err);
+    console.error("Image search error:", err);
+    alert("Failed to search by image. Check console for details.");
   }
 }

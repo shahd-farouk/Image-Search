@@ -1,8 +1,7 @@
 import requests
 from pathlib import Path
-from datetime import datetime
 import shutil
-from furniture import Util, Furniture, FurnitureRepository
+from furniture import Util, Furniture, FurnitureRepository, Furniture
 
 # ---------- Config ----------
 UPLOAD_DIR = Path("static/uploads")
@@ -11,8 +10,10 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 BASE_IMAGE_URL = "https://test-eg.homzmart.net/catalog/product"
 INDEX = Util.get_index_name()
 
+# ---------- Elasticsearch setup ----------
 es = Util.get_connection()
-repo = FurnitureRepository(es, INDEX)
+# Delete and recreate the index on each run
+repo = FurnitureRepository(es, INDEX, force=True)
 
 # ---------- Fetch products ----------
 def fetch_products(from_idx=0, size=100):
@@ -35,21 +36,23 @@ def download_and_prepare_media(media_gallery):
         dest_path = UPLOAD_DIR / dest_filename
         file_url = f"{BASE_IMAGE_URL}{file_path}"
 
+        # Download only if missing
         if not dest_path.exists():
             try:
                 r = requests.get(file_url, stream=True, timeout=30)
-                if r.status_code == 200:
-                    with open(dest_path, 'wb') as f:
-                        shutil.copyfileobj(r.raw, f)
-                else:
-                    continue
-            except Exception:
+                r.raise_for_status()
+                with open(dest_path, "wb") as f:
+                    shutil.copyfileobj(r.raw, f)
+                print(f"Downloaded: {dest_path}")
+            except Exception as e:
+                print(f"Failed to download {file_url}: {e}")
                 continue
 
+        # Use relative path from 'static/' for the app
         prepared_gallery.append({
             "id": media.get("id"),
             "media_type": media.get("media_type", "image"),
-            "file": str(dest_path),  # absolute/local path for embeddings
+            "file": f"uploads/{dest_filename}",
             "position": media.get("position", 1),
             "disabled": media.get("disabled", False),
             "types": media.get("types", ["image"])
@@ -64,7 +67,10 @@ def import_products(hits):
     for hit in hits:
         source = hit.get("_source", {})
         media_gallery = download_and_prepare_media(source.get("media_gallery", []))
-        main_image = media_gallery[0]["file"] if media_gallery else ""
+
+        # Main image path relative to 'static/'
+        main_image_rel = media_gallery[0]["file"] if media_gallery else ""
+        image_path = main_image_rel  # already relative to 'static/'
 
         furniture = Furniture(
             sku=source.get("sku"),
@@ -76,7 +82,7 @@ def import_products(hits):
             price=source.get("price", 0),
             special_price=source.get("special_price"),
             final_price=source.get("final_price", 0),
-            image_path=main_image,
+            image_path=image_path,
             description=source.get("description"),
             media_gallery=media_gallery
         )

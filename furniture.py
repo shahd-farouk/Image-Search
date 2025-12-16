@@ -2,9 +2,9 @@ import os
 import re
 import warnings
 from PIL import Image
+from pathlib import Path
 from typing import List, Optional
 from elasticsearch import Elasticsearch
-from sentence_transformers import SentenceTransformer
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -29,7 +29,8 @@ class Util:
             es = Elasticsearch(ES_HOST, basic_auth=(ES_USER, ES_PASS))
         else:
             es = Elasticsearch(ES_HOST)
-        es.info()
+
+        es.info()  # fail fast if ES is unreachable
         return es
 
     @staticmethod
@@ -87,12 +88,23 @@ class Util:
 
 # ---------- Domain Model ----------
 class Furniture:
-    model = SentenceTransformer("clip-ViT-B-32")
+    _model = None
 
-    def __init__(self, sku: str, item_name: str, material_value: str, item_type: str,
-                 colors, dimensions: str, price: float, special_price: Optional[float],
-                 final_price: float, image_path: str, description: Optional[str] = None,
-                 media_gallery: Optional[List[dict]] = None):
+    def __init__(
+        self,
+        sku: str,
+        item_name: str,
+        material_value: str,
+        item_type: str,
+        colors,
+        dimensions: str,
+        price: float,
+        special_price: Optional[float],
+        final_price: float,
+        image_path: str,
+        description: Optional[str] = None,
+        media_gallery: Optional[List[dict]] = None
+    ):
         self.sku = sku
         self.item_name = item_name
         self.material_value = material_value
@@ -109,6 +121,15 @@ class Furniture:
         self.text_embedding = None
 
     @staticmethod
+    def get_model():
+        if Furniture._model is None:
+            from sentence_transformers import SentenceTransformer
+            print("Loading CLIP model...")
+            Furniture._model = SentenceTransformer("clip-ViT-B-32")
+            print("CLIP model loaded.")
+        return Furniture._model
+
+    @staticmethod
     def _parse_colors(colors):
         if isinstance(colors, str):
             return [c.strip() for c in re.split(r",|\||;", colors) if c.strip()]
@@ -117,11 +138,15 @@ class Furniture:
         return []
 
     def generate_embeddings(self):
+        model = Furniture.get_model()
+
         if self.image_path:
-            image = Image.open(self.image_path).convert("RGB")
-            self.image_embedding = self.model.encode(image).astype(float).tolist()
+            img_path = Path("static") / self.image_path
+            image = Image.open(img_path).convert("RGB")
+            self.image_embedding = model.encode(image).astype(float).tolist()
+
         if self.description:
-            self.text_embedding = self.model.encode(self.description).astype(float).tolist()
+            self.text_embedding = model.encode(self.description).astype(float).tolist()
 
     def to_dict(self):
         return {
@@ -143,8 +168,8 @@ class Furniture:
 
 # ---------- Repository ----------
 class FurnitureRepository:
-    def __init__(self, es: Elasticsearch, index_name: str):
-        Util.create_index(es, index_name)
+    def __init__(self, es: Elasticsearch, index_name: str, force: bool = False):
+        Util.create_index(es, index_name, force=force)
         self.es = es
         self.index = index_name
 
@@ -160,25 +185,38 @@ class FurnitureRepository:
             ops.append(item.to_dict())
         self.es.bulk(body=ops, refresh=refresh)
 
-    def search_by_knn(self, field: str, vector: List[float], k: int = 5, source_fields: List[str] = None):
+    def search_by_knn(
+        self,
+        field: str,
+        vector: List[float],
+        k: int = 5,
+        source_fields: List[str] = None
+    ):
         if source_fields is None:
             source_fields = [
                 "sku", "item_name", "material_value", "item_type",
-                "colors", "dimensions", "price", "special_price", "final_price",
-                "image_path", "description", "media_gallery"
+                "colors", "dimensions", "price", "special_price",
+                "final_price", "image_path", "description", "media_gallery"
             ]
-        knn_query = {
-            "field": field,
-            "k": k,
-            "num_candidates": 100,
-            "query_vector": vector
+
+        query = {
+            "knn": {
+                "field": field,
+                "query_vector": vector,
+                "k": k,
+                "num_candidates": max(100, k * 10)
+            },
+            "size": k,
+            "_source": source_fields
         }
+
         try:
-            resp = self.es.search(
-                index=self.index,
-                body={"size": k, "knn": knn_query, "_source": source_fields}
-            )
-            return resp
+            print(f"Running KNN search on {field} with k={k}, vector len={len(vector)}")
+            result = self.es.search(index=self.index, body=query)
+            print(f"KNN returned {len(result['hits']['hits'])} hits")
+            return result
         except Exception as e:
             print("KNN search error:", e)
+            import traceback
+            traceback.print_exc()
             return {"hits": {"hits": []}}
