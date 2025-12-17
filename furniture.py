@@ -1,13 +1,12 @@
 import os
 import re
-import warnings
-from PIL import Image
 from pathlib import Path
+from PIL import Image, ImageFile
 from typing import List, Optional
 from elasticsearch import Elasticsearch
 from sentence_transformers import SentenceTransformer
 
-warnings.filterwarnings("ignore", category=UserWarning)
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 # ---------- Configuration ----------
 DEFAULT_INDEX = os.environ.get("ES_INDEX", "products_en")
@@ -132,12 +131,23 @@ class Furniture:
     def generate_embeddings(self):
 
         if self.image_path:
-            img_path = Path("static") / self.image_path
-            image = Image.open(img_path).convert("RGB")
-            self.image_embedding = self.model.encode(image).astype(float).tolist()
+            img_filename = self.image_path.replace("\\", "/").split("/")[-1]
+            img_path = Path("static/uploads") / img_filename
+            try:
+                image = Image.open(img_path).convert("RGB")
+                self.image_embedding = self.model.encode(image).astype(float).tolist()
+            except FileNotFoundError:
+                print(f"Image not found: {img_path}")
+                self.image_embedding = []
+            except OSError as e:
+                print(f"Failed to load image {img_path}: {e}")
+                self.image_embedding = []
 
-        if self.description:
+        if not self.description:
+            self.text_embedding = []
+        else:
             self.text_embedding = self.model.encode(self.description).astype(float).tolist()
+
 
     def to_dict(self):
         return {
