@@ -6,8 +6,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 from furniture import Util, Furniture, FurnitureRepository, Furniture
 
-load_dotenv()
-
 # ---------- Config ----------
 UPLOAD_DIR = Path("static/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -28,7 +26,7 @@ es = Util.get_connection()
 repo = FurnitureRepository(es, INDEX, force=True)
 
 # ---------- Fetch products ----------
-def fetch_products(page=2, page_size=100):
+def fetch_products(page=7, page_size=300):
     headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",

@@ -141,6 +141,8 @@ async def search_by_text(q: str, k: int = 5):
                     "dimensions^0.2",
                     "sku^0.1"
                 ],
+                "fuzziness": "AUTO",
+                "prefix_length": 2,
                 "boost": 3.0
             }
         })
