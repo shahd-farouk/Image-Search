@@ -1,14 +1,23 @@
+import os
 import time
 import shutil
 import requests
 from pathlib import Path
+from dotenv import load_dotenv
 from furniture import Util, Furniture, FurnitureRepository, Furniture
+
+load_dotenv()
 
 # ---------- Config ----------
 UPLOAD_DIR = Path("static/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-MY_BASE_URL = "https://api.homzmart.com"
+load_dotenv()
+MY_BASE_URL = os.getenv("BASE_URL")
+
+if not MY_BASE_URL:
+    raise ValueError("BASE_URL is not set in the .env file")
+
 PRODUCT_SEARCH_ENDPOINT = f"{MY_BASE_URL}/search/web/v3/search/group/product"
 
 INDEX = Util.get_index_name()
