@@ -5,6 +5,7 @@ from PIL import Image
 from pathlib import Path
 from typing import List, Optional
 from elasticsearch import Elasticsearch
+from sentence_transformers import SentenceTransformer
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -88,7 +89,7 @@ class Util:
 
 # ---------- Domain Model ----------
 class Furniture:
-    _model = None
+    model = SentenceTransformer("clip-ViT-B-32")
 
     def __init__(
         self,
@@ -121,15 +122,6 @@ class Furniture:
         self.text_embedding = None
 
     @staticmethod
-    def get_model():
-        if Furniture._model is None:
-            from sentence_transformers import SentenceTransformer
-            print("Loading CLIP model...")
-            Furniture._model = SentenceTransformer("clip-ViT-B-32")
-            print("CLIP model loaded.")
-        return Furniture._model
-
-    @staticmethod
     def _parse_colors(colors):
         if isinstance(colors, str):
             return [c.strip() for c in re.split(r",|\||;", colors) if c.strip()]
@@ -138,15 +130,14 @@ class Furniture:
         return []
 
     def generate_embeddings(self):
-        model = Furniture.get_model()
 
         if self.image_path:
             img_path = Path("static") / self.image_path
             image = Image.open(img_path).convert("RGB")
-            self.image_embedding = model.encode(image).astype(float).tolist()
+            self.image_embedding = self.model.encode(image).astype(float).tolist()
 
         if self.description:
-            self.text_embedding = model.encode(self.description).astype(float).tolist()
+            self.text_embedding = self.model.encode(self.description).astype(float).tolist()
 
     def to_dict(self):
         return {

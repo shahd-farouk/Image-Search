@@ -44,7 +44,6 @@ async function fetchSuggestion() {
   }
 }
 
-// Simple HTML escape to prevent XSS if item names have special chars
 function escapeHtml(text) {
   const div = document.createElement("div");
   div.textContent = text;
