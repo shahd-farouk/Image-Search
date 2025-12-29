@@ -48,7 +48,16 @@ class Util:
                 "mappings": {
                     "properties": {
                         "sku": {"type": "keyword"},
-                        "item_name": {"type": "text"},
+                        "item_name": {
+                            "type": "text",
+                            "fields": {
+                                "keyword": {
+                                "type": "keyword"
+                                }
+                            }},
+                        "item_name_suggest": {
+                            "type": "completion"
+                        },
                         "description": {"type": "text"},
                         "material_value": {"type": "keyword"},
                         "item_type": {"type": "keyword"},
@@ -153,6 +162,9 @@ class Furniture:
         return {
             "sku": self.sku,
             "item_name": self.item_name,
+            "item_name_suggest": {
+            "input": list(set(self.item_name.split()))  # split words as inputs
+            },
             "material_value": self.material_value,
             "item_type": self.item_type,
             "colors": self.colors,

@@ -1,14 +1,20 @@
 import os
 import io
+import json
+import time
+import logging
 import uvicorn
-from typing import List
 from PIL import Image
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from typing import List
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import FileResponse
 from furniture import Util, FurnitureRepository, Furniture
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 
 app = FastAPI(title="Furniture Search API")
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 STATIC_DIR = "static"
 UPLOAD_DIR = os.path.join(STATIC_DIR, "uploads")
@@ -68,7 +74,7 @@ async def add_item(
     description: str = Form(""),
     image: UploadFile = File(...),
 ):
-    image_path = save_upload_image(image)
+    image_path = await save_upload_image(image)
 
     furniture = Furniture(
         sku=sku,
@@ -94,51 +100,72 @@ async def add_item(
         "image_path": image_path,
     }
 
+# Simple in-memory cache for dynamic terms
+DYNAMIC_TERMS_CACHE = {"colors": [], "item_type": []}
+DYNAMIC_TERMS_LAST_FETCH = 0
+CACHE_TTL_SECONDS = 300  # refresh every 5 minutes
 
 @app.get("/search/text")
 async def search_by_text(q: str, k: int = 5):
     if not q:
         raise HTTPException(400, "Missing query parameter 'q'")
 
-    dynamic_terms = get_dynamic_terms(fields=["colors", "item_type"])
-    colors_list = dynamic_terms.get("colors", [])
-    item_types = dynamic_terms.get("item_type", [])
+    global DYNAMIC_TERMS_CACHE, DYNAMIC_TERMS_LAST_FETCH
+    now = time.time()
+    if now - DYNAMIC_TERMS_LAST_FETCH > CACHE_TTL_SECONDS or not DYNAMIC_TERMS_CACHE["colors"]:
+        DYNAMIC_TERMS_CACHE = get_dynamic_terms(fields=["colors", "item_type"])
+        DYNAMIC_TERMS_LAST_FETCH = now
+        logger.info(f"Dynamic terms cache refreshed: {DYNAMIC_TERMS_CACHE}")
 
-    tokens = q.lower().split()
-    color_tokens = [t for t in tokens if t in colors_list]
-    type_tokens = [t for t in tokens if t in item_types]
-    other_tokens = [t for t in tokens if t not in color_tokens + type_tokens]
+    colors_list = [c.lower() for c in DYNAMIC_TERMS_CACHE.get("colors", [])]
+    item_types_list = [t.lower() for t in DYNAMIC_TERMS_CACHE.get("item_type", [])]
+
+    logger.info(f"Colors list (lowercased): {colors_list}")
+    logger.info(f"Item types list (lowercased): {item_types_list}")
+
+    tokens = q.split()
+    tokens_lower = [t.lower() for t in tokens]
+
+    logger.info(f"Query tokens: {tokens}")
+    logger.info(f"Query tokens lowercased: {tokens_lower}")
+
+    color_tokens = [t for t in tokens_lower if t in colors_list]
+    type_tokens = [t for t in tokens_lower if t in item_types_list]
+    other_tokens = [t for t in tokens_lower if t not in color_tokens + type_tokens]
+
+    logger.info(f"Identified color tokens: {color_tokens}")
+    logger.info(f"Identified item_type tokens: {type_tokens}")
+    logger.info(f"Other tokens: {other_tokens}")
 
     should_clauses = []
-
-    if color_tokens and type_tokens:
-        should_clauses.append({
-            "bool": {
-                "must": [
-                    {"terms": {"item_type": type_tokens}},
-                    {"terms": {"colors": color_tokens}}
-                ],
-                "boost": 10.0
-            }
-        })
 
     if type_tokens:
         should_clauses.append({
             "terms": {
-                "item_type": type_tokens,
+                "item_type.keyword": type_tokens,
+                "boost": 10.0
+            }
+        })
+        logger.info(f"Added item_type terms clause: {type_tokens}")
+
+    if color_tokens:
+        should_clauses.append({
+            "terms": {
+                "colors.keyword": color_tokens,
                 "boost": 6.0
             }
         })
+        logger.info(f"Added colors terms clause: {color_tokens}")
 
     if other_tokens or tokens:
         should_clauses.append({
             "multi_match": {
                 "query": q,
                 "fields": [
-                    "item_name^1",
-                    "description^0.5",
-                    "material_value^0.3",
-                    "dimensions^0.2",
+                    "item_name^2",
+                    "description^1",
+                    "material_value^0.5",
+                    "dimensions^0.3",
                     "sku^0.1"
                 ],
                 "fuzziness": "AUTO",
@@ -146,14 +173,7 @@ async def search_by_text(q: str, k: int = 5):
                 "boost": 3.0
             }
         })
-
-    if color_tokens:
-        should_clauses.append({
-            "terms": {
-                "colors": color_tokens,
-                "boost": 1.0
-            }
-        })
+        logger.info("Added fuzzy multi_match clause for free-text search")
 
     query_body = {
         "size": k,
@@ -165,8 +185,13 @@ async def search_by_text(q: str, k: int = 5):
         }
     }
 
+    # Pretty-print the query
+    logger.info("Final Elasticsearch query:\n%s", json.dumps(query_body, indent=4))
+
     resp = es.search(index=INDEX, body=query_body)
     hits = resp.get("hits", {}).get("hits", [])
+
+    logger.info(f"Number of hits: {len(hits)}")
 
     return {
         "results": [
@@ -178,27 +203,46 @@ async def search_by_text(q: str, k: int = 5):
 @app.get("/suggest")
 async def suggest_text(q: str):
     if not q:
+        logger.info("null ml awl")
         return {"did_you_mean": None}
 
     suggest_body = {
         "suggest": {
-            "spelling": {
-                "text": q,
-                "term": {
-                    "field": "item_name",
-                    "suggest_mode": "always"
+            "autocomplete": {
+                "prefix": q,
+                "completion": {
+                    "field": "item_name_suggest",
+                    "skip_duplicates": True,
+                    "size": 1
                 }
             }
         }
     }
 
     try:
-        resp = es.suggest(index=INDEX, body=suggest_body)
-        options = resp.get("spelling", [])[0].get("options", [])
-        return {"did_you_mean": options[0]["text"] if options else None}
-    except Exception:
+        resp = es.search(index=INDEX, body=suggest_body, request_timeout=10)
+
+        options = (
+            resp
+            .get("suggest", {})
+            .get("autocomplete", [])[0]
+            .get("options", [])
+        )
+
+        if options:
+            logger.info("no options avaliable")
+            return {"did_you_mean": options[0]["text"]}
+
+        logger.info("mfesh haga returned aslan")
         return {"did_you_mean": None}
 
+    except Exception as e:
+        logger.exception(e)
+        logger.info("exception hasal")
+        return {"did_you_mean": None}
+
+MIN_SIMILARITY = 0.7
+CANDIDATE_K = 50
 
 @app.post("/search/image")
 async def search_by_image(image: UploadFile = File(...), k: int = 5):
@@ -208,12 +252,50 @@ async def search_by_image(image: UploadFile = File(...), k: int = 5):
     except Exception as e:
         raise HTTPException(400, f"Invalid image: {e}")
 
-    vector = Furniture.model.encode(img).astype(float).tolist()
-    resp = repo.search_by_knn("image_embedding", vector, k=k)
+    # IMPORTANT: normalize embeddings
+    vector = (
+        Furniture.model.encode(img, normalize_embeddings=True)
+        .astype(float)
+        .tolist()
+    )
+
+    # Step 1: retrieve candidates
+    resp = repo.search_by_knn(
+        field="image_embedding",
+        vector=vector,
+        k=CANDIDATE_K
+    )
 
     hits = resp.get("hits", {}).get("hits", [])
-    return {"results": [h.get("_source", {}) for h in hits]}
 
+    # Step 2: filter by similarity threshold
+    filtered_hits = [
+        h for h in hits
+        if h.get("_score", 0) >= MIN_SIMILARITY
+    ]
+
+    # Step 3: sort by score (descending)
+    filtered_hits.sort(key=lambda h: h["_score"], reverse=True)
+
+    # Step 4: limit to requested k
+    final_hits = filtered_hits[:k]
+
+    # Optional: reject low-confidence searches entirely
+    if not final_hits:
+        return {
+            "results": [],
+            "message": "No confident image matches found"
+        }
+
+    return {
+        "results": [
+            {
+                **h["_source"],
+                "_score": h["_score"]
+            }
+            for h in final_hits
+        ]
+    }
 
 @app.post("/search/embedding")
 async def search_by_embedding(

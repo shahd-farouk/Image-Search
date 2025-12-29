@@ -4,7 +4,7 @@ import shutil
 import requests
 from pathlib import Path
 from dotenv import load_dotenv
-from furniture import Util, Furniture, FurnitureRepository, Furniture
+from furniture import Util, Furniture, FurnitureRepository
 
 # ---------- Config ----------
 UPLOAD_DIR = Path("static/uploads")
@@ -22,146 +22,180 @@ INDEX = Util.get_index_name()
 
 # ---------- Elasticsearch setup ----------
 es = Util.get_connection()
-# Delete and recreate the index on each run
-repo = FurnitureRepository(es, INDEX, force=True)
+repo = FurnitureRepository(es, INDEX, force=True)  # Recreates index
+
+
+# ---------- Helper ----------
+def get_attribute_value(product, label):
+    for attr in product.get("attributes", []):
+        if attr.get("frontend_label") == label:
+            value = attr.get("value", "").strip()
+            return value if value else ""
+    return ""
+
 
 # ---------- Fetch products ----------
-def fetch_products(page=7, page_size=300):
+def fetch_products():
     headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": "PostmanRuntime/7.31.3",
-            "Origin": MY_BASE_URL,
-            "Referer": MY_BASE_URL + "/"
-        }
-
-    payload = {
-            "currentPage": page,
-            "pageSize": page_size,
-            "sort": "default",
-            "lang": "en"
-        }
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "PostmanRuntime/7.31.3",
+        "Origin": MY_BASE_URL,
+        "Referer": MY_BASE_URL + "/"
+    }
 
     session = requests.Session()
     session.headers.update(headers)
 
-    response = session.post(PRODUCT_SEARCH_ENDPOINT, json=payload, timeout=30)
-    response.raise_for_status()
-    data = response.json()
+    all_items = []
 
-    items = data.get("data", {}).get("products", {}).get("items", [])
-    print(f"Fetched page {page}, items: {len(items)}")
-    return items
+    try:
+        for page in range(1, 3):
+            payload = {
+                "currentPage": page,
+                "pageSize": 100,
+                "sort": "default",
+                "lang": "en"
+            }
 
-# ---------- Download media ----------
-def download_and_prepare_media(product, retries=2, backoff=2):
-    prepared_gallery = []
+            print(f"Requesting products (page {page})...")
+            response = session.post(PRODUCT_SEARCH_ENDPOINT, json=payload, timeout=120)
+            response.raise_for_status()
+            data = response.json()
 
-    # Collect all image URLs: main + gallery
-    image_urls = []
+            items = data.get("data", {}).get("products", {}).get("items", [])
+            print(f"Fetched {len(items)} products from page {page}")
 
-    # main image
+            all_items.extend(items)
+
+            # Stop early if fewer than pageSize items returned
+            if len(items) < 500:
+                print("No more pages available. Stopping early.")
+                break
+
+        print(f"Total products fetched: {len(all_items)}")
+        return all_items
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching products: {e}")
+        return all_items
+
+# ---------- Download ONLY the main original image ----------
+def download_main_image(product, retries=3):
     main_image_url = product.get("image", {}).get("url")
-    if main_image_url:
-        image_urls = [main_image_url]
-    else:
-        image_urls = []
+    if not main_image_url:
+        return ""
 
-    # gallery images
-    gallery_images = product.get("media_gallery", [])[:0]
-    for img in gallery_images:
-        url = img.get("url")
-        if url:
-            image_urls.append(url)
+    # Clean filename
+    dest_filename = Path(main_image_url).name.split("?")[0]
+    if not dest_filename.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
+        dest_filename += ".jpg"
 
-    # download all images
-    for position, image_url in enumerate(image_urls, start=1):
-        dest_filename = Path(image_url).name.split("?")[0]
-        dest_path = UPLOAD_DIR / dest_filename
+    dest_path = UPLOAD_DIR / dest_filename
 
-        if not dest_path.exists():
-            attempt = 0
-            while attempt <= retries:
-                try:
-                    r = requests.get(image_url, stream=True, timeout=30)
-                    r.raise_for_status()
-                    with open(dest_path, "wb") as f:
-                        shutil.copyfileobj(r.raw, f)
-                    print(f"Downloaded: {dest_path}")
-                    break
-                except Exception as e:
-                    attempt += 1
-                    if attempt > retries:
-                        print(f"Failed to download {image_url} after {retries} retries: {e}")
-                        dest_path = None
-                    else:
-                        print(f"Retrying download ({attempt}/{retries}) for {image_url} in {backoff}s...")
-                        time.sleep(backoff)
+    if not dest_path.exists():
+        attempt = 0
+        while attempt <= retries:
+            try:
+                r = requests.get(main_image_url, stream=True, timeout=30)
+                r.raise_for_status()
+                with open(dest_path, "wb") as f:
+                    shutil.copyfileobj(r.raw, f)
+                # print(f"Downloaded main image: {dest_path}")
+                break
+            except Exception as e:
+                attempt += 1
+                if attempt > retries:
+                    print(f"Failed to download {main_image_url}: {e}")
+                else:
+                    time.sleep(2 ** attempt)
 
-        # add to gallery only if downloaded successfully
-        if dest_path and dest_path.exists():
-            prepared_gallery.append({
-                "id": product.get("id"),
-                "media_type": "image",
-                "file": f"uploads/{dest_filename}",
-                "position": position,
-                "disabled": False,
-                "types": ["image"]
-            })
+    return f"uploads/{dest_filename}" if dest_path.exists() else ""
 
-    return prepared_gallery
 
 # ---------- Import products ----------
 def import_products(products):
     items = []
-
     products_with_images = 0
+    skipped_tableau = 0
 
     for product in products:
-        media_gallery = download_and_prepare_media(product)
-        if media_gallery:
+
+        if product.get("sub_category") == "Tableau":
+            skipped_tableau += 1
+            continue
+
+        # Download only the main image
+        image_path = download_main_image(product)
+        if image_path:
             products_with_images += 1
 
-        image_path = media_gallery[0]["file"] if media_gallery else ""
+        # Empty media_gallery (since you don't want extra images)
+        media_gallery = []
 
-        description = product.get("description")
-        if not isinstance(description, str):
-            description = ""
+        # Description - preserve HTML
+        desc_obj = product.get("description", {})
+        description = desc_obj.get("html", "") if isinstance(desc_obj, dict) else ""
+
+        # Colors
+        colors_str = get_attribute_value(product, "Colors")
+        colors = [c.strip() for c in colors_str.split(",") if c.strip()] if colors_str else []
+
+        # Item type
+        item_type = product.get("item_type", "")
+        if not item_type:
+            item_type = product.get("sub_category", "")
+
+        # Material
+        material = get_attribute_value(product, "Detailed Materials")
+        if not material:
+            material = "Mixed"
+
+        # Dimensions
+        width = get_attribute_value(product, "Width (cm)")
+        depth = get_attribute_value(product, "Depth (cm)") or get_attribute_value(product, "Length (cm)")
+        height = get_attribute_value(product, "Height (cm)")
+        dim_parts = [v for v in [width, depth, height] if v]
+        dimensions = " x ".join(f"{v} cm" for v in dim_parts) if dim_parts else ""
+
+        # Prices
+        price_range = product.get("price_range", {}).get("minimum_price", {})
+        regular_price = price_range.get("regular_price", {}).get("value") or 0
+        final_price = price_range.get("final_price", {}).get("value")
+        special_price = final_price if final_price and final_price != regular_price else None
+        final_price = final_price or regular_price
 
         furniture = Furniture(
-            sku=product.get("sku") or product.get("id"),
-            item_name=product.get("name"),
-            material_value=product.get("material", "Mixed"),
-            item_type=product.get("type_id", ""),
-            colors=product.get("colors", []),
-            dimensions=product.get("dimensions"),
-            price=product.get("price", 0),
-            special_price=product.get("special_price"),
-            final_price=product.get("final_price", product.get("price", 0)),
+            sku=product.get("sku") or str(product.get("id")),
+            item_name=product.get("name", "Unnamed Product"),
+            material_value=material,
+            item_type=item_type,
+            colors=colors,
+            dimensions=dimensions,
+            price=regular_price,
+            special_price=special_price,
+            final_price=final_price,
             image_path=image_path,
             description=description,
-            media_gallery=media_gallery
+            media_gallery=media_gallery  # Empty list
         )
 
         items.append(furniture)
 
     repo.bulk_insert(items, refresh=True)
-    print(f"Total products fetched: {len(products)}")
-    print(f"Products with images: {products_with_images}")
-    print(f"Imported {len(items)} products with embeddings.")
+    print(f"Total products processed: {len(products)}")
+    print(f"Skipped Tableau products: {skipped_tableau}")
+    print(f"Products with main image: {products_with_images}")
+    print(f"Imported {len(items)} products into Elasticsearch.")
+
 
 # ---------- Main ----------
 if __name__ == "__main__":
-    INDEX = Util.get_index_name()
-    es = Util.get_connection()
+    print(f"Using index: {INDEX}")
 
-    if es.indices.exists(index=INDEX):
-        print(f"Deleting existing index: {INDEX}")
-        es.indices.delete(index=INDEX)
-
-    print(f"Creating index: {INDEX}")
-    repo = FurnitureRepository(es, INDEX, force=True)
-
-    # ---------- Fetch and import ----------
     products = fetch_products()
-    import_products(products)
+
+    if not products:
+        print("No products fetched. Check your BASE_URL and network.")
+    else:
+        import_products(products)

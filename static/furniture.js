@@ -23,11 +23,10 @@ async function fetchSuggestion() {
     suggestionDiv.innerHTML = "";
     return;
   }
-
   try {
     const resp = await fetch(`/suggest?q=${encodeURIComponent(q)}`);
     const data = await resp.json();
-
+    console.log(JSON.stringify(data));
     if (data.did_you_mean && data.did_you_mean.toLowerCase() !== q.toLowerCase()) {
       suggestionDiv.innerHTML = `
         Did you mean: 
@@ -85,12 +84,9 @@ function displayResults(items) {
     const info = document.createElement("div");
     info.className = "result-content";
 
-    const price = item.final_price ?? item.special_price ?? item.price ?? "N/A";
-
     info.innerHTML = `
       <h3 class="result-title">${escapeHtml(item.item_name || "")}</h3>
-      <p class="result-description">${escapeHtml(item.description || "")}</p>
-      <div class="result-price">${price}</div>
+      <div class="result-price">${escapeHtml(item.item_type || "")}</div>
       <div class="result-tags">
         ${(item.colors || [])
           .map(color => `<span class="tag">${escapeHtml(color)}</span>`)
