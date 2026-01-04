@@ -211,11 +211,15 @@ async def suggest_text(q: str):
     if len(q) < 2:
         logger.info("null from the beginning")
         return {"did_you_mean": None}
+    
+    query_words = q.split()
+    last_word = query_words[-1]  # last incomplete word
+    base = " ".join(query_words[:-1])  # preceding words
 
     suggest_body = {
         "suggest": {
             "autocomplete": {
-                "prefix": q,
+                "prefix": last_word,
                 "completion": {
                     "field": "item_name_suggest",
                     "skip_duplicates": True,
@@ -237,7 +241,7 @@ async def suggest_text(q: str):
         )
 
         if options:
-            suggestions = [opt["text"] for opt in options]
+            suggestions = [f"{base} {opt['text']}".strip() for opt in options]
             # logger.info("no options avaliable")
             return {"did_you_mean": suggestions}
 
