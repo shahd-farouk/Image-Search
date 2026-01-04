@@ -27,16 +27,27 @@ async function fetchSuggestion() {
     const resp = await fetch(`/suggest?q=${encodeURIComponent(q)}`);
     const data = await resp.json();
     console.log(JSON.stringify(data));
-    if (data.did_you_mean && data.did_you_mean.toLowerCase() !== q.toLowerCase()) {
-      suggestionDiv.innerHTML = `
-        Did you mean: 
-        <a href="#" onclick="setSearchExample('${escapeHtml(data.did_you_mean)}')">
-          ${escapeHtml(data.did_you_mean)}
-        </a>?
-      `;
-    } else {
-      suggestionDiv.innerHTML = "";
+
+    if (data.did_you_mean && data.did_you_mean.length > 0) {
+      // Filter out exact matches (case-insensitive)
+      const filteredSuggestions = data.did_you_mean.filter(
+        s => s.toLowerCase() !== q.toLowerCase()
+      );
+
+      if (filteredSuggestions.length > 0) {
+        suggestionDiv.innerHTML = `
+          Did you mean: 
+          ${filteredSuggestions
+            .map(
+              s => `<a href="#" onclick="setSearchExample('${escapeHtml(s)}')">${escapeHtml(s)}</a>`
+            )
+            .join(", ")}?
+        `;
+        return;
+      }
     }
+
+    suggestionDiv.innerHTML = "";
   } catch (err) {
     console.error("Suggestion error:", err);
     suggestionDiv.innerHTML = "";
@@ -110,7 +121,7 @@ async function searchText() {
   suggestionDiv.innerHTML = "";
 
   try {
-    const resp = await fetch(`/search/text?q=${encodeURIComponent(q)}&k=10`);
+    const resp = await fetch(`/search/text?q=${encodeURIComponent(q)}&k=25`);
     if (!resp.ok) {
       const text = await resp.text();
       alert(`Error ${resp.status}: ${text}`);
@@ -138,7 +149,7 @@ async function searchImage() {
   formData.append("image", fileInput.files[0]);
 
   try {
-    const resp = await fetch("/search/image?k=10", {
+    const resp = await fetch("/search/image?k=25", {
       method: "POST",
       body: formData
     });

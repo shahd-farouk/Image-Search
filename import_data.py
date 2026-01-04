@@ -22,7 +22,7 @@ INDEX = Util.get_index_name()
 
 # ---------- Elasticsearch setup ----------
 es = Util.get_connection()
-repo = FurnitureRepository(es, INDEX, force=True)  # Recreates index
+repo = FurnitureRepository(es, INDEX, force=False)  # Recreates index
 
 
 # ---------- Helper ----------
@@ -50,10 +50,10 @@ def fetch_products():
     all_items = []
 
     try:
-        for page in range(1, 3):
+        for page in range(10, 12):
             payload = {
                 "currentPage": page,
-                "pageSize": 100,
+                "pageSize": 500,
                 "sort": "default",
                 "lang": "en"
             }

@@ -106,104 +106,110 @@ DYNAMIC_TERMS_LAST_FETCH = 0
 CACHE_TTL_SECONDS = 300  # refresh every 5 minutes
 
 @app.get("/search/text")
-async def search_by_text(q: str, k: int = 5):
+async def search_by_text(q: str, k: int = 25):
     if not q:
         raise HTTPException(400, "Missing query parameter 'q'")
 
+    # Cache refresh
     global DYNAMIC_TERMS_CACHE, DYNAMIC_TERMS_LAST_FETCH
     now = time.time()
-    if now - DYNAMIC_TERMS_LAST_FETCH > CACHE_TTL_SECONDS or not DYNAMIC_TERMS_CACHE["colors"]:
+    if now - DYNAMIC_TERMS_LAST_FETCH > CACHE_TTL_SECONDS or not DYNAMIC_TERMS_CACHE.get("colors"):
         DYNAMIC_TERMS_CACHE = get_dynamic_terms(fields=["colors", "item_type"])
         DYNAMIC_TERMS_LAST_FETCH = now
-        logger.info(f"Dynamic terms cache refreshed: {DYNAMIC_TERMS_CACHE}")
 
     colors_list = [c.lower() for c in DYNAMIC_TERMS_CACHE.get("colors", [])]
     item_types_list = [t.lower() for t in DYNAMIC_TERMS_CACHE.get("item_type", [])]
 
-    logger.info(f"Colors list (lowercased): {colors_list}")
-    logger.info(f"Item types list (lowercased): {item_types_list}")
-
-    tokens = q.split()
-    tokens_lower = [t.lower() for t in tokens]
-
-    logger.info(f"Query tokens: {tokens}")
-    logger.info(f"Query tokens lowercased: {tokens_lower}")
-
+    tokens_lower = [t.lower() for t in q.split()]
     color_tokens = [t for t in tokens_lower if t in colors_list]
     type_tokens = [t for t in tokens_lower if t in item_types_list]
-    other_tokens = [t for t in tokens_lower if t not in color_tokens + type_tokens]
 
-    logger.info(f"Identified color tokens: {color_tokens}")
-    logger.info(f"Identified item_type tokens: {type_tokens}")
-    logger.info(f"Other tokens: {other_tokens}")
+    logger.info(f"Colors: {color_tokens}, Types: {type_tokens}, Query: {q}")
 
-    should_clauses = []
+    # Base text search (still important for relevance when attributes don't match)
+    text_query = {
+        "multi_match": {
+            "query": q,
+            "fields": [
+                "item_type^10",
+                "colors^7",
+                "item_name^5",
+                "description^2",
+                "material_value^0.8",
+                "dimensions^0.5",
+                "sku^0.2"
+            ],
+            "type": "most_fields",
+            "fuzziness": "AUTO",
+            "prefix_length": 1
+        }
+    }
 
-    if type_tokens:
-        should_clauses.append({
-            "terms": {
-                "item_type.keyword": type_tokens,
-                "boost": 10.0
-            }
-        })
-        logger.info(f"Added item_type terms clause: {type_tokens}")
+    # Attribute boosts using constant_score → fixed high score regardless of text frequency
+    # should_clauses = []
 
-    if color_tokens:
-        should_clauses.append({
-            "terms": {
-                "colors.keyword": color_tokens,
-                "boost": 6.0
-            }
-        })
-        logger.info(f"Added colors terms clause: {color_tokens}")
+    # 1. Highest priority: both color AND item_type match → huge fixed boost
+    # if color_tokens and type_tokens:
+    #     should_clauses.append({
+    #         "constant_score": {
+    #             "filter": {
+    #                 "bool": {
+    #                     "must": [
+    #                         {"terms": {"colors.keyword": color_tokens}},
+    #                         {"terms": {"item_type.keyword": type_tokens}}
+    #                     ]
+    #                 }
+    #             },
+    #             "boost": 100000.0   # insanely high - always wins
+    #         }
+    #     })
 
-    if other_tokens or tokens:
-        should_clauses.append({
-            "multi_match": {
-                "query": q,
-                "fields": [
-                    "item_name^2",
-                    "description^1",
-                    "material_value^0.5",
-                    "dimensions^0.3",
-                    "sku^0.1"
-                ],
-                "fuzziness": "AUTO",
-                "prefix_length": 2,
-                "boost": 3.0
-            }
-        })
-        logger.info("Added fuzzy multi_match clause for free-text search")
+    # 2. Color match only
+    # elif color_tokens:
+    #     should_clauses.append({
+    #         "constant_score": {
+    #             "filter": {"terms": {"colors.keyword": color_tokens}},
+    #             "boost": 1
+    #         }
+    #     })
 
+    # 3. Item type match only
+    # elif type_tokens:
+    #     should_clauses.append({
+    #         "constant_score": {
+    #             "filter": {"terms": {"item_type.keyword": type_tokens}},
+    #             "boost": 30000.0
+    #         }
+    #     })
+
+    # Final query
     query_body = {
         "size": k,
         "query": {
             "bool": {
-                "should": should_clauses,
-                "minimum_should_match": 1
+                "must": text_query,           # base relevance from text
+                # "should": should_clauses,     # massive fixed boosts for attributes
+                "minimum_should_match": 0
             }
         }
     }
 
-    # Pretty-print the query
     logger.info("Final Elasticsearch query:\n%s", json.dumps(query_body, indent=4))
 
-    resp = es.search(index=INDEX, body=query_body)
+    resp = es.search(index=INDEX, body=query_body, explain = True)
     hits = resp.get("hits", {}).get("hits", [])
-
-    logger.info(f"Number of hits: {len(hits)}")
 
     return {
         "results": [
-            {**h["_source"], "_score": h["_score"]}
-            for h in hits
+            {**hit["_source"], "_score": hit["_score"]}
+            for hit in hits
         ]
     }
 
 @app.get("/suggest")
 async def suggest_text(q: str):
-    if not q:
-        logger.info("null ml awl")
+    if len(q) < 2:
+        logger.info("null from the beginning")
         return {"did_you_mean": None}
 
     suggest_body = {
@@ -213,7 +219,8 @@ async def suggest_text(q: str):
                 "completion": {
                     "field": "item_name_suggest",
                     "skip_duplicates": True,
-                    "size": 1
+                    "size": 3,
+                    "fuzzy": {"fuzziness": 2}
                 }
             }
         }
@@ -230,15 +237,16 @@ async def suggest_text(q: str):
         )
 
         if options:
-            logger.info("no options avaliable")
-            return {"did_you_mean": options[0]["text"]}
+            suggestions = [opt["text"] for opt in options]
+            # logger.info("no options avaliable")
+            return {"did_you_mean": suggestions}
 
-        logger.info("mfesh haga returned aslan")
+        logger.info("nothing returned")
         return {"did_you_mean": None}
 
     except Exception as e:
         logger.exception(e)
-        logger.info("exception hasal")
+        logger.info("exception occured")
         return {"did_you_mean": None}
 
 MIN_SIMILARITY = 0.7
