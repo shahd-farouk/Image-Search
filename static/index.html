@@ -2,68 +2,102 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Furniture Search</title>
+  <title>Furniture Haven | Discover Premium Furniture</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="stylesheet" href="/static/styles.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-  <main class="container">
-    <div class="search-sections-container">
-      <div class="search-section">
-        <h2 class="search-title"><i class="fas fa-search"></i> Search by Text</h2>
-        <div class="search-box">
-          <input type="text" id="textQuery" placeholder="Describe the furniture you're looking for..."/>
-          <button onclick="searchText()">
-            <i class="fas fa-search"></i> Search
-          </button>
-        </div>
-        <div class="search-examples">
-          <span>Try:</span>
-          <span class="example-tag" onclick="setSearchExample('beige sofa')">beige sofa</span>
-          <span class="example-tag" onclick="setSearchExample('side chair')">side chair</span>
-          <span class="example-tag" onclick="setSearchExample('chaise lounge')">chaise lounge</span>
-        </div>
-        <div id="suggestion" class="suggestion"></div>
-      </div>
-      
-      
-      <div class="search-section">
-        <h2 class="search-title"><i class="fas fa-image"></i> Search by Image</h2>
-        <div class="search-box">
-          <div style="width: 100%;">
-            <input type="file" id="imageQuery" accept="image/*"/>
-            <div class="file-info">
-              <i class="fas fa-info-circle"></i>
-              Upload an image of furniture you like and we'll find similar items
+  <div class="container">
+    <!-- Brand Header -->
+    <header class="brand-header">
+      <h1 class="logo">
+        <i class="fas fa-couch"></i>
+        Furniture Search
+      </h1>
+      <!-- <p class="tagline">Discover premium furniture collections curated for elegant living spaces</p> -->
+    </header>
+
+    <!-- Search Container -->
+    <main class="search-container">
+      <div class="unified-search">
+        <div class="search-input-wrapper">
+          <div class="text-input-container">
+            <!-- <i class="fas fa-search"></i> -->
+            <input 
+              type="text" 
+              id="textQuery" 
+              placeholder="Describe your ideal furniture piece..."
+              class="unified-input"
+            />
+          </div>
+          
+          <div class="upload-section">
+            <label for="imageQuery" class="upload-btn" id="imageUploadBtn">
+              <i class="fas fa-cloud-upload-alt"></i>
+              <span>Upload Image</span>
+            </label>
+            <input 
+              type="file" 
+              id="imageQuery" 
+              accept="image/*" 
+              style="display: none;"
+            />
+            
+            <div class="file-indicator" id="imageIndicator">
+              <div class="file-info">
+                <i class="fas fa-check-circle"></i>
+                <span class="file-name" id="imageName">No file selected</span>
+              </div>
+              <button class="remove-file" id="clearImageBtn" type="button">
+                <i class="fas fa-times"></i>
+              </button>
             </div>
           </div>
-          <button onclick="searchImage()">
-            <i class="fas fa-upload"></i> Search by Image
-          </button>
+        </div>
+        
+        <button class="search-button" onclick="searchText()">
+          <i class="fas fa-search"></i>
+          <span>Find Furniture</span>
+        </button>
+        
+        <div class="suggestion-text" id="suggestion"></div>
+      </div>
+
+      <div class="search-suggestions">
+        <span class="suggestions-label">Popular searches:</span>
+        <span class="suggestion-tag" onclick="setSearchExample('beige l-shape sofa')">Beige L-Shape</span>
+        <span class="suggestion-tag" onclick="setSearchExample('black side chair')">Black Chair</span>
+        <span class="suggestion-tag" onclick="setSearchExample('steel coffee table')">Steel Table</span>
+        <span class="suggestion-tag" onclick="setSearchExample('wood dining set')">Dining Set</span>
+      </div>
+    </main>
+
+    <!-- Results Section -->
+    <section class="results-section">
+      <div class="results-header">
+        <h2 class="results-title">
+          <i class="fas fa-chair"></i>
+          Results
+        </h2>
+        <div class="results-count" id="resultsCount">0 items</div>
+      </div>
+
+      <div class="results-grid" id="results">
+        <div class="no-results">
+          <i class="fas fa-search"></i>
+          <h3>Begin Your Search</h3>
+          <p>Enter a description or upload an image to discover matching furniture pieces</p>
         </div>
       </div>
-    </div>
+    </section>
 
-    <div class="results-header">
-      <h2><i class="fas fa-list"></i> Search Results</h2>
-      <div class="results-count" id="resultsCount">0 items</div>
-    </div>
+    <footer>
+      <p>Furniture Haven &copy; 2023 | Elevating living spaces with curated design</p>
+    </footer>
+  </div>
 
-
-    <div id="results">
-      <div class="no-results">
-        <i class="fas fa-search"></i>
-        <h3>No search results yet</h3>
-        <p>Use the search boxes above to find furniture items.</p>
-      </div>
-    </div>
-  </main>
-
-  <footer class="container">
-    <p>Furniture Search &copy; 2023 | Find your perfect home furnishings</p>
-  </footer>
-
-<script src="/static/furniture.js"></script>
+  <script src="/static/furniture.js"></script>
 </body>
 </html>
